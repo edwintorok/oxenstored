@@ -116,9 +116,10 @@ val newcon : capacity:capacity -> backend -> t
 
 val open_fd : Unix.file_descr -> capacity:capacity -> t
 
-val open_mmap : Xenmmap.t -> (unit -> unit) -> capacity:capacity -> t
+val open_mmap :
+  Xenmmap.t -> (unit -> unit) -> under_testing:bool -> capacity:capacity -> t
 
-val close : t -> unit
+val close : t -> under_testing:bool -> unit
 
 val is_fd : t -> bool
 
@@ -145,3 +146,10 @@ val is_selectable : t -> bool
 val get_fd : t -> Unix.file_descr
 
 val debug : t -> string
+
+(**/**)
+
+(* WARNING: Functions below this point are to be used in testing only *)
+
+val unsafe_pop_output : t -> Packet.t
+(** UNSAFE: Only use this in unit tests *)

@@ -351,19 +351,21 @@ let newcon ~capacity backend =
 
 let open_fd fd = newcon (Fd {fd})
 
-let open_mmap mmap notifyfct =
+let open_mmap mmap notifyfct ~under_testing =
   (* Advertise XENSTORE_SERVER_FEATURE_RECONNECTION *)
-  Xs_ring.set_server_features
-    (Xenmmap.to_interface mmap)
-    (Xs_ring.Server_features.singleton Xs_ring.Server_feature.Reconnection) ;
+  if not under_testing then
+    Xs_ring.set_server_features
+      (Xenmmap.to_interface mmap)
+      (Xs_ring.Server_features.singleton Xs_ring.Server_feature.Reconnection) ;
   newcon (Xenmmap {mmap; eventchn_notify= notifyfct; work_again= false})
 
-let close con =
-  match con.backend with
-  | Fd backend ->
-      Unix.close backend.fd
-  | Xenmmap backend ->
-      Xenmmap.unmap backend.mmap
+let close con ~under_testing =
+  if not under_testing then
+    match con.backend with
+    | Fd backend ->
+        Unix.close backend.fd
+    | Xenmmap backend ->
+        Xenmmap.unmap backend.mmap
 
 let is_fd con = match con.backend with Fd _ -> true | Xenmmap _ -> false
 
@@ -378,6 +380,11 @@ let has_old_output con = String.length con.partial_out > 0
 let has_output con = has_new_output con || has_old_output con
 
 let peek_output con = Queue.peek con.pkt_out
+
+let unsafe_pop_output con =
+  (* Only call when being tested *)
+  assert (Unix.geteuid () != 0) ;
+  Queue.pop con.pkt_out
 
 let has_partial_input con =
   match con.partial_in with
