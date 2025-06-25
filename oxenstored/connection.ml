@@ -163,30 +163,6 @@ let update_poll_status_on_pop con is_partial_empty poll_status =
   if (not poll_status.Poll.read) && Xenbus.Xb.can_input con.xb then
     poll_status.Poll.read <- true
 
-module Watch = struct
-  module T = struct
-    type t = watch
-
-    let compare w1 w2 =
-      (* cannot compare watches from different connections *)
-      assert (w1.con == w2.con) ;
-      match String.compare w1.token w2.token with
-      | 0 ->
-          String.compare w1.path w2.path
-      | n ->
-          n
-  end
-
-  module Set = Set.Make (T)
-
-  let flush_events t =
-    BoundedPipe.flush_pipe t.pending_watchevents ;
-    Option.iter (update_poll_status_on_push t.con) t.con.poll_status ;
-    not (BoundedPipe.is_empty t.pending_watchevents)
-
-  let pending_watchevents t = BoundedPipe.length t.pending_watchevents
-end
-
 let source_flush_watchevents t =
   BoundedPipe.flush_pipe t.pending_source_watchevents ;
   (* pending_source_watchevents is possibly empty now, check if
