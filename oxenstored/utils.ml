@@ -19,12 +19,14 @@ open Stdext
 
 exception ConversionFailed of string
 
-let int_of_string_exn x =
+let int_of_string_exn ?(unsigned = false) x =
   match int_of_string_opt x with
-  | Some i ->
-      i
+  | Some i when unsigned && i < 0 ->
+      raise (ConversionFailed x)
   | None ->
       raise (ConversionFailed x)
+  | Some i ->
+      i
 
 (* lists utils *)
 let filter_out filter l = List.filter (fun x -> not (List.mem x filter)) l
