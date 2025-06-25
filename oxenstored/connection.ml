@@ -347,10 +347,7 @@ let get_watch_path con path =
     rpath ^ path
 
 let get_watches (con : t) path =
-  if Hashtbl.mem con.watches path then
-    Hashtbl.find con.watches path
-  else
-    []
+  Option.value ~default:[] (Hashtbl.find_opt con.watches path)
 
 let get_children_watches con path =
   let path = path ^ "/" in
