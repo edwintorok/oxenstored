@@ -800,7 +800,7 @@ let do_introduce con t domains cons data =
         let ndom = Domains.create ~remote_port domains domid mfn in
         Connections.add_domain cons ndom ;
         Connections.fire_spec_watches (Transaction.get_root t) cons
-          Store.Path.introduce_domain ;
+          Store.Path.introduce_domain domid ;
         ndom
       with _ -> raise Invalid_Cmd_Args
   in
@@ -823,7 +823,7 @@ let do_release con t domains cons data =
   Store.reset_permissions (Transaction.get_store t) domid ;
   if fire_spec_watches then
     Connections.fire_spec_watches (Transaction.get_root t) cons
-      Store.Path.release_domain
+      Store.Path.release_domain domid
   else
     raise Invalid_Cmd_Args
 
