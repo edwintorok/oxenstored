@@ -174,6 +174,21 @@ let add_watch cons con path token depth =
   let apath = Connection.get_watch_path con path in
   (* fail on invalid paths early by calling key_of_str before adding watch *)
   let key = key_of_str apath in
+  let is_special_watch = apath.[0] = '@' in
+  ( if is_special_watch then
+      (* No depth can be specified for @releaseDomain/domid watches.
+         Only depth=1 can be specified for other special watches *)
+      match depth with
+      | Some _ when String.starts_with ~prefix:"@releaseDomain/" apath ->
+          raise
+            (Invalid_argument
+               "@releaseDomain/domid does not accept a depth parameter"
+            )
+      | Some x when x <> 1 ->
+          raise (Invalid_argument "If set, special watches' depth can only be 1")
+      | _ ->
+          ()
+  ) ;
   let watch = Connection.add_watch con (path, apath) token depth in
   let watches =
     if Trie.mem cons.watches key then
@@ -220,12 +235,36 @@ let fire_watches ?oldroot source root cons path recurse =
 
 let send_watchevents con = Connection.source_flush_watchevents con
 
-let fire_spec_watches root cons specpath =
+let fire_spec_watches root cons specpath domid =
   let source = find_domain cons 0 in
+
+  (* Trigger @releaseDomain/domid watches as well *)
+  let specpaths =
+    specpath
+    ::
+    ( if specpath = "@releaseDomain" then
+        [Printf.sprintf "%s/%d" specpath domid]
+      else
+        []
+    )
+  in
   iter cons (fun con ->
       List.iter
-        (Connection.fire_single_watch source (None, root) 0)
-        (Connection.get_watches con specpath)
+        (fun specpath ->
+          List.iter
+            (fun w ->
+              (* Report the path as '@xDomain/domid' if depth is specified *)
+              let watch =
+                if w.Connection.depth = Some 1 then
+                  {w with path= Printf.sprintf "%s/%d" specpath domid}
+                else
+                  w
+              in
+              Connection.fire_single_watch source (None, root) 0 watch
+            )
+            (Connection.get_watches con specpath)
+        )
+        specpaths
   )
 
 let set_target cons domain target_domain =

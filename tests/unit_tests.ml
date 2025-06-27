@@ -580,6 +580,93 @@ let test_watches_depth () =
     ; (dom1, none, (Read, ["/a/1"]), (Error, ["ENOENT"]))
     ]
 
+(* Check that @introduceDomain and @releaseDomain watches appear on
+   respective calls and depth is well-handled.
+   From documentation upstream:
+    The semantics for a specification of <depth> differ for generating
+    <wspecial> events: specifying "1" will report the related domid by using
+    @<wspecial>/<domid> for the reported path. Other <depth>
+    values are not supported. *)
+let test_special_watches_depth () =
+  let store, doms, cons = initialize () in
+  let dom0 = create_dom0_conn cons doms in
+
+  (* Adding a special watch with a negative depth fails *)
+  run store cons doms
+    [
+      ( dom0
+      , none
+      , (Watch, ["@introduceDomain"; "token"; "-1"])
+      , (Error, ["EINVAL"])
+      )
+    ] ;
+  assert_watches dom0 [] ;
+
+  (* Adding a special watch with a depth other than 1 fails *)
+  run store cons doms
+    [
+      ( dom0
+      , none
+      , (Watch, ["@releaseDomain"; "token"; "0"])
+      , (Error, ["EINVAL"])
+      )
+    ] ;
+  assert_watches dom0 [] ;
+
+  (* Adding a @releaseDomain/domid with any depth fails *)
+  run store cons doms
+    [
+      ( dom0
+      , none
+      , (Watch, ["@releaseDomain/5"; "token"; "1"])
+      , (Error, ["EINVAL"])
+      )
+    ] ;
+  assert_watches dom0 [] ;
+
+  (* Adding a special watch with depth=1 works *)
+  run store cons doms
+    [(dom0, none, (Watch, ["@introduceDomain"; "token"; "1"]), (Watch, ["OK"]))] ;
+  assert_watches dom0 [("@introduceDomain", "token", Some 1)] ;
+
+  check_for_watchevent dom0 "@introduceDomain" "token" ;
+
+  run store cons doms
+    [(dom0, none, (Watch, ["@releaseDomain"; "token"; "1"]), (Watch, ["OK"]))] ;
+  assert_watches dom0
+    [("@releaseDomain", "token", Some 1); ("@introduceDomain", "token", Some 1)] ;
+  check_for_watchevent dom0 "@releaseDomain" "token" ;
+
+  run store cons doms
+    [(dom0, none, (Watch, ["@releaseDomain/5"; "token2"]), (Watch, ["OK"]))] ;
+  assert_watches dom0
+    [
+      ("@releaseDomain", "token", Some 1)
+    ; ("@introduceDomain", "token", Some 1)
+    ; ("@releaseDomain/5", "token2", None)
+    ] ;
+  check_for_watchevent dom0 "@releaseDomain/5" "token2" ;
+
+  (* Watchevents generated contain the new domid *)
+  run store cons doms
+    [
+      ( dom0
+      , none
+      , (Introduce, ["5"; "5"; "5"])
+      , (Watchevent, ["@introduceDomain/5"; "token"])
+      )
+    ] ;
+  let actual = Xenbus.Xb.unsafe_pop_output dom0.xb in
+  check_result actual (Introduce, ["OK"]) ;
+
+  run store cons doms
+    [
+      (dom0, none, (Release, ["5"]), (Watchevent, ["@releaseDomain/5"; "token"]))
+    ] ;
+  check_for_watchevent dom0 "@releaseDomain/5" "token2" ;
+  let actual = Xenbus.Xb.unsafe_pop_output dom0.xb in
+  check_result actual (Release, ["OK"])
+
 (* Check that a write failure doesn't generate a watch *)
 let test_no_watch_on_error () =
   let store, doms, cons = initialize () in
@@ -792,6 +879,7 @@ let () =
         ; ("test_recursive_rm_watch", `Quick, test_recursive_rm_watch)
         ; ("test_no_watch_on_error", `Quick, test_no_watch_on_error)
         ; ("test_watches_depth", `Quick, test_watches_depth)
+        ; ("test_special_watches_depth", `Quick, test_special_watches_depth)
         ]
       )
     ; ( "Quota tests"
