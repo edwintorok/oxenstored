@@ -305,7 +305,7 @@ let test_transactions_really_do_conflict () =
     ]
 
 let assert_watches c expected =
-  Alcotest.(check' (list @@ pair string string))
+  Alcotest.(check' (list @@ triple string string (option int)))
     ~msg:"Check connection's watches are as expected"
     ~actual:(Connection.list_watches c)
     ~expected
@@ -336,7 +336,7 @@ let test_simple_watches () =
 
   (* One Watchevent is fired immediately after adding the watch unconditionally *)
   run store cons doms [(dom0, none, (Watch, ["/a"; "token"]), (Watch, ["OK"]))] ;
-  assert_watches dom0 [("/a", "token")] ;
+  assert_watches dom0 [("/a", "token", None)] ;
   check_for_watchevent dom0 "/a" "token" ;
 
   (* dom0 can see its own write via watches *)
@@ -367,7 +367,7 @@ let test_relative_watches () =
     ; (dom0, none, (Write, ["/local/domain/0/device"; ""]), (Write, ["OK"]))
     ; (dom0, none, (Watch, ["device"; "token"]), (Watch, ["OK"]))
     ] ;
-  assert_watches dom0 [("device", "token")] ;
+  assert_watches dom0 [("device", "token", None)] ;
   (* One Watchevent is fired immediately after adding the watch unconditionally *)
   check_for_watchevent dom0 "device" "token" ;
 
@@ -381,7 +381,7 @@ let test_relative_watches () =
       )
     ] ;
   check_for_watchevent dom0 "device/vbd" "token" ;
-  assert_watches dom0 [("device", "token")]
+  assert_watches dom0 [("device", "token", None)]
 
 (* Check that a connection only receives a watch if it
    can read the node that was modified. *)
@@ -391,7 +391,7 @@ let test_watches_read_perm () =
   let dom1 = create_domU_conn cons doms 1 in
 
   run store cons doms [(dom1, none, (Watch, ["/a"; "token"]), (Watch, ["OK"]))] ;
-  assert_watches dom1 [("/a", "token")] ;
+  assert_watches dom1 [("/a", "token", None)] ;
   (* One Watchevent is fired immediately after adding the watch unconditionally *)
   check_for_watchevent dom1 "/a" "token" ;
 
@@ -400,7 +400,7 @@ let test_watches_read_perm () =
       (dom0, none, (Write, ["/a"; "hello"]), (Write, ["OK"]))
     ; (dom1, none, (Read, ["/a"]), (Error, ["EACCES"]))
     ] ;
-  assert_watches dom1 [("/a", "token")] ;
+  assert_watches dom1 [("/a", "token", None)] ;
   check_no_watchevents dom1
 
 (* Check that watches only appear on transaction commit
@@ -409,7 +409,7 @@ let test_transaction_watches () =
   let store, doms, cons = initialize () in
   let dom0 = create_dom0_conn cons doms in
   run store cons doms [(dom0, none, (Watch, ["/a"; "token"]), (Watch, ["OK"]))] ;
-  assert_watches dom0 [("/a", "token")] ;
+  assert_watches dom0 [("/a", "token", None)] ;
   (* One Watchevent is fired immediately after adding the watch unconditionally *)
   check_for_watchevent dom0 "/a" "token" ;
 
@@ -441,14 +441,14 @@ let test_introduce_release_watches () =
 
   run store cons doms
     [(dom0, none, (Watch, ["@introduceDomain"; "token"]), (Watch, ["OK"]))] ;
-  assert_watches dom0 [("@introduceDomain", "token")] ;
+  assert_watches dom0 [("@introduceDomain", "token", None)] ;
   (* One Watchevent is fired immediately after adding the watch unconditionally *)
   check_for_watchevent dom0 "@introduceDomain" "token" ;
 
   run store cons doms
     [(dom0, none, (Watch, ["@releaseDomain"; "token"]), (Watch, ["OK"]))] ;
   assert_watches dom0
-    [("@releaseDomain", "token"); ("@introduceDomain", "token")] ;
+    [("@releaseDomain", "token", None); ("@introduceDomain", "token", None)] ;
   (* One Watchevent is fired immediately after adding the watch unconditionally *)
   check_for_watchevent dom0 "@releaseDomain" "token" ;
 
@@ -483,19 +483,102 @@ let test_recursive_rm_watch () =
     ] ;
   (* One Watchevent is fired immediately after adding the watch unconditionally *)
   check_for_watchevent dom0 "/a/b/c" "token" ;
-  assert_watches dom0 [("/a/b/c", "token")] ;
+  assert_watches dom0 [("/a/b/c", "token", None)] ;
 
   run store cons doms
     [(dom0, none, (Watch, ["/a/b/y/z"; "token"]), (Watch, ["OK"]))] ;
   (* One Watchevent is fired immediately after adding the watch unconditionally *)
   check_for_watchevent dom0 "/a/b/y/z" "token" ;
-  assert_watches dom0 [("/a/b/c", "token"); ("/a/b/y/z", "token")] ;
+  assert_watches dom0 [("/a/b/c", "token", None); ("/a/b/y/z", "token", None)] ;
 
   (* Check that removing a parent node triggers watches recursively
      down into the children *)
   run store cons doms [(dom0, none, (Rm, ["/a"]), (Rm, ["OK"]))] ;
   check_for_watchevent dom0 "/a/b/c" "token" ;
   check_for_watchevent dom0 "/a/b/y/z" "token"
+
+(* Check that watches implement a depth parameter properly.
+   From documentation upstream:
+    The event's path matches the watch's <wpath> if it is an child
+    of <wpath>. This match can be limited by specifying <depth> (a
+    decimal value of 0 or larger): it denotes the directory levels
+    below <wpath> to consider for a match ("0" would not match for
+    a child of <wpath>, "1" would match only for a direct child,
+    etc.). *)
+let test_watches_depth () =
+  let store, doms, cons = initialize () in
+  let dom0 = create_dom0_conn cons doms in
+  let dom1 = create_domU_conn cons doms 1 in
+
+  (* No watch events are generated without registering *)
+  run store cons doms
+    [
+      (dom0, none, (Mkdir, ["/a"]), (Mkdir, ["OK"]))
+    ; (dom0, none, (Setperms, ["/a"; "b0"]), (Setperms, ["OK"]))
+    ] ;
+  assert_watches dom0 [] ;
+
+  (* Check that a watch with a depth parameter is added without errors *)
+  run store cons doms
+    [(dom0, none, (Watch, ["/a"; "token"; "1"]), (Watch, ["OK"]))] ;
+  assert_watches dom0 [("/a", "token", Some 1)] ;
+  check_for_watchevent dom0 "/a" "token" ;
+
+  (* Adding another watch on the same connection with the same path and token,
+     but with a different depth fails *)
+  run store cons doms
+    [(dom0, none, (Watch, ["/a"; "token"; "3"]), (Error, ["EEXIST"]))] ;
+  assert_watches dom0 [("/a", "token", Some 1)] ;
+
+  (* Adding a watch with a negative depth fails *)
+  run store cons doms
+    [(dom0, none, (Watch, ["/b"; "token-1"; "-1"]), (Error, ["EINVAL"]))] ;
+  assert_watches dom0 [("/a", "token", Some 1)] ;
+
+  (* Adding another watch with a different token at a different depth succeeds *)
+  run store cons doms
+    [(dom0, none, (Watch, ["/a"; "token2"; "2"]), (Watch, ["OK"]))] ;
+  assert_watches dom0 [("/a", "token2", Some 2); ("/a", "token", Some 1)] ;
+  check_for_watchevent dom0 "/a" "token2" ;
+
+  (* Add a zero-depth watch *)
+  run store cons doms
+    [(dom0, none, (Watch, ["/a"; "token0"; "0"]), (Watch, ["OK"]))] ;
+  assert_watches dom0
+    [
+      ("/a", "token0", Some 0); ("/a", "token2", Some 2); ("/a", "token", Some 1)
+    ] ;
+  check_for_watchevent dom0 "/a" "token0" ;
+
+  (* Check that the right watches are triggered depending on the depth of writes *)
+  run store cons doms [(dom0, none, (Write, ["/a"; "foo"]), (Write, ["OK"]))] ;
+  check_for_watchevent dom0 "/a" "token0" ;
+  check_for_watchevent dom0 "/a" "token2" ;
+  check_for_watchevent dom0 "/a" "token" ;
+  run store cons doms [(dom1, none, (Write, ["/a"; "baz"]), (Write, ["OK"]))] ;
+  check_for_watchevent dom0 "/a" "token0" ;
+  check_for_watchevent dom0 "/a" "token2" ;
+  check_for_watchevent dom0 "/a" "token" ;
+  run store cons doms [(dom0, none, (Write, ["/a/b"; "foo"]), (Write, ["OK"]))] ;
+  check_for_watchevent dom0 "/a/b" "token2" ;
+  check_for_watchevent dom0 "/a/b" "token" ;
+  run store cons doms [(dom1, none, (Write, ["/a/c"; "baz"]), (Write, ["OK"]))] ;
+  check_for_watchevent dom0 "/a/c" "token2" ;
+  check_for_watchevent dom0 "/a/c" "token" ;
+
+  (* Check that only the deeper watch is triggered with a write to a grandchild node *)
+  run store cons doms
+    [(dom0, none, (Write, ["/a/b/c"; "foo"]), (Write, ["OK"]))] ;
+  check_for_watchevent dom0 "/a/b/c" "token2" ;
+
+  (* reads don't generate watches *)
+  run store cons doms
+    [
+      (dom0, none, (Read, ["/a"]), (Read, ["baz\000"]))
+    ; (dom0, none, (Read, ["/a/1"]), (Error, ["ENOENT"]))
+    ; (dom1, none, (Read, ["/a"]), (Read, ["baz\000"]))
+    ; (dom1, none, (Read, ["/a/1"]), (Error, ["ENOENT"]))
+    ]
 
 (* Check that a write failure doesn't generate a watch *)
 let test_no_watch_on_error () =
@@ -708,6 +791,7 @@ let () =
           )
         ; ("test_recursive_rm_watch", `Quick, test_recursive_rm_watch)
         ; ("test_no_watch_on_error", `Quick, test_no_watch_on_error)
+        ; ("test_watches_depth", `Quick, test_watches_depth)
         ]
       )
     ; ( "Quota tests"

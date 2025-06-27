@@ -170,11 +170,11 @@ let key_of_str path =
 
 let key_of_path path = "" :: Store.Path.to_string_list path
 
-let add_watch cons con path token =
+let add_watch cons con path token depth =
   let apath = Connection.get_watch_path con path in
   (* fail on invalid paths early by calling key_of_str before adding watch *)
   let key = key_of_str apath in
-  let watch = Connection.add_watch con (path, apath) token in
+  let watch = Connection.add_watch con (path, apath) token depth in
   let watches =
     if Trie.mem cons.watches key then
       Trie.find cons.watches key
@@ -197,19 +197,22 @@ let del_watch cons con path token =
 (* path is absolute *)
 let fire_watches ?oldroot source root cons path recurse =
   let key = key_of_path path in
+  let depth = List.length path in
   let path = Store.Path.to_string path in
   let roots = (oldroot, root) in
   let fire_watch _ = function
     | None ->
         ()
     | Some watches ->
-        List.iter (fun w -> Connection.fire_watch source roots w path) watches
+        List.iter
+          (fun w -> Connection.fire_watch source roots w path depth)
+          watches
   in
   let fire_rec _x = function
     | None ->
         ()
     | Some watches ->
-        List.iter (Connection.fire_single_watch source roots) watches
+        List.iter (Connection.fire_single_watch source roots depth) watches
   in
   Trie.iter_path fire_watch cons.watches key ;
   if recurse then
@@ -221,7 +224,7 @@ let fire_spec_watches root cons specpath =
   let source = find_domain cons 0 in
   iter cons (fun con ->
       List.iter
-        (Connection.fire_single_watch source (None, root))
+        (Connection.fire_single_watch source (None, root) 0)
         (Connection.get_watches con specpath)
   )
 

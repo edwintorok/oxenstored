@@ -709,18 +709,20 @@ let transaction_replay c t doms cons =
         (fun () -> ignore @@ Connection.end_transaction c tid None)
 
 let do_watch con _t _domains cons data =
-  let node, token =
+  let node, token, depth =
     match split None '\000' data with
+    | [node; token; depth; ""] ->
+        (node, token, Some (Utils.int_of_string_exn depth ~unsigned:true))
     | [node; token; ""] ->
-        (node, token)
+        (node, token, None)
     | _ ->
         raise Invalid_Cmd_Args
   in
-  let watch = Connections.add_watch cons con node token in
+  let watch = Connections.add_watch cons con node token depth in
   Packet.Ack
     (fun () ->
       (* xenstore.txt says this watch is fired immediately,
-         		   implying even if path doesn't exist or is unreadable *)
+         implying even if path doesn't exist or is unreadable *)
       Connection.fire_single_watch_unchecked con watch
     )
 

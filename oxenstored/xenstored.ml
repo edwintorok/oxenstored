@@ -213,10 +213,17 @@ module DB = struct
                 ~remote_port:(Utils.int_of_string_exn remote_port)
                 (Utils.int_of_string_exn domid)
                 (Nativeint.of_string mfn)
+          (* Migrate from previous versions when watches did not have
+             a depth parameter *)
           | ["watch"; domid; path; token] ->
               watch_f
                 (Utils.int_of_string_exn domid)
+                (unhexify path) (unhexify token) None
+          | ["watch"; domid; path; token; depth] ->
+              watch_f
+                (Utils.int_of_string_exn domid)
                 (unhexify path) (unhexify token)
+                (Some (Utils.int_of_string_exn depth ~unsigned:true))
           | ["store"; path; perms; value] ->
               store_f (getpath path)
                 (Perms.Node.of_string (unhexify perms ^ "\000"))
@@ -284,8 +291,8 @@ module DB = struct
       else
         Connections.find_domain cons id
     in
-    let watch_f id path token =
-      ignore (Connections.add_watch cons (get_con id) path token)
+    let watch_f id path token depth =
+      ignore (Connections.add_watch cons (get_con id) path token depth)
     in
     let store_f path perms value =
       op.Store.write path value ;

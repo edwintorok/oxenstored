@@ -94,6 +94,12 @@ type watch = {
   ; token: string
   ; path: string
   ; base: string
+  ; depth:
+      int option (* directory levels below [path] to consider for a match *)
+  ; path_depth: int
+        (* directory levels of [path]. useful as a separate value
+           because watch.path gets replaced with the event path
+           during triggering and to avoid constant List.length calls *)
   ; is_relative: bool
   ; pending_watchevents: Xenbus.Xb.Packet.t BoundedPipe.t
 }
@@ -202,12 +208,24 @@ let get_path con =
   Printf.sprintf "/local/domain/%i/"
     (match con.dom with None -> 0 | Some d -> Domain.get_id d)
 
-let watch_create ~con ~path ~token =
+let get_watch_path_with_base base path =
+  if path.[0] = '@' || path.[0] = '/' then
+    path
+  else
+    base ^ path
+
+let watch_create ~con ~path ~token ~depth =
+  let base = get_path con in
+  let path_depth =
+    get_watch_path_with_base base path |> Store.Path.of_string |> List.length
+  in
   {
     con
   ; token
   ; path
-  ; base= get_path con
+  ; base
+  ; depth
+  ; path_depth
   ; is_relative= path.[0] <> '/' && path.[0] <> '@'
   ; pending_watchevents=
       BoundedPipe.create ~capacity:!Define.maxwatchevents
@@ -359,7 +377,7 @@ let get_children_watches con path =
 
 let is_dom0 con = Perms.Connection.is_dom0 (get_perm con)
 
-let add_watch con (path, apath) token =
+let add_watch con (path, apath) token depth =
   if
     !Quota.activate
     && !Define.maxwatch > 0
@@ -370,7 +388,7 @@ let add_watch con (path, apath) token =
   let l = get_watches con apath in
   if List.exists (fun w -> w.token = token) l then
     raise Define.Already_exist ;
-  let watch = watch_create ~con ~token ~path in
+  let watch = watch_create ~con ~token ~path ~depth in
   Hashtbl.replace con.watches apath (watch :: l) ;
   con.nb_watches <- con.nb_watches + 1 ;
   watch
@@ -397,7 +415,8 @@ let list_watches con =
   let ll =
     Hashtbl.fold
       (fun _ watches acc ->
-        List.map (fun watch -> (watch.path, watch.token)) watches :: acc
+        List.map (fun watch -> (watch.path, watch.token, watch.depth)) watches
+        :: acc
       )
       con.watches []
   in
@@ -446,19 +465,52 @@ let fire_single_watch_unchecked source watch =
       *)
       failwith "watch event overflow, cannot happen"
 
-let fire_single_watch source (oldroot, root) watch =
-  let abspath = get_watch_path watch.con watch.path |> Store.Path.of_string in
-  let perms = lookup_watch_perms oldroot root abspath in
-  if Perms.can_fire_watch watch.con.perm perms then
-    fire_single_watch_unchecked source watch
-  else
-    let perms =
-      perms |> List.map (Perms.Node.to_string ~sep:" ") |> String.concat ", "
-    in
-    let con = get_domstr watch.con in
-    Logging.watch_not_fired ~con perms (Store.Path.to_string abspath)
+let fire_single_watch source (oldroot, root) depth watch =
+  let abspath =
+    get_watch_path_with_base watch.base watch.path |> Store.Path.of_string
+  in
+  (* If the watch is "special" or does not have a depth specified (all watches
+     before the extended watches feature), it's always triggered. Otherwise
+     it is to be triggered if the difference between the directory level of
+     the event's child path and watch's specified path is less or equal to
+     the watch's specified depth
 
-let fire_watch source roots watch path =
+     e.g., for a watch registered on the path /a with different depths,
+     the table specifies whether or not the watch will be triggered:
+     .----------------------------------.-------.-------.------.
+     | Trigger event path \ Watch depth |   0   |   1   |  2   |
+     :----------------------------------+-------+-------+------:
+     | /a                               | true  | true  | true |
+     :----------------------------------+-------+-------+------:
+     | /a/b                             | false | true  | true |
+     :----------------------------------+-------+-------+------:
+     | /a/b/c                           | false | false | true |
+     '----------------------------------'-------'-------'------'
+  *)
+  let depth_satisfied =
+    if watch.path.[0] = '@' then
+      true
+    else
+      match watch.depth with
+      | None ->
+          true
+      | Some x when x >= depth - watch.path_depth ->
+          true
+      | _ ->
+          false
+  in
+  if depth_satisfied then
+    let perms = lookup_watch_perms oldroot root abspath in
+    if Perms.can_fire_watch watch.con.perm perms then
+      fire_single_watch_unchecked source watch
+    else
+      let perms =
+        perms |> List.map (Perms.Node.to_string ~sep:" ") |> String.concat ", "
+      in
+      let con = get_domstr watch.con in
+      Logging.watch_not_fired ~con perms (Store.Path.to_string abspath)
+
+let fire_watch source roots watch path depth =
   let new_path =
     if watch.is_relative && path.[0] = '/' then
       let n = String.length watch.base and m = String.length path in
@@ -466,7 +518,7 @@ let fire_watch source roots watch path =
     else
       path
   in
-  fire_single_watch source roots {watch with path= new_path}
+  fire_single_watch source roots depth {watch with path= new_path}
 
 (* Search for a valid unused transaction id. *)
 let rec valid_transaction_id con proposed_id =
@@ -599,9 +651,12 @@ let dump con chan =
   in
   (* dump watches *)
   List.iter
-    (fun (path, token) ->
-      Printf.fprintf chan "watch,%d,%s,%s\n" id (Utils.hexify path)
-        (Utils.hexify token)
+    (fun (path, token, depth) ->
+      let depth =
+        match depth with None -> "" | Some x -> Printf.sprintf ",%d" x
+      in
+      Printf.fprintf chan "watch,%d,%s,%s%s\n" id (Utils.hexify path)
+        (Utils.hexify token) depth
     )
     (list_watches con)
 
@@ -609,7 +664,16 @@ let debug con =
   let domid = get_domstr con in
   let watches =
     List.map
-      (fun (path, token) -> Printf.sprintf "watch %s: %s %s\n" domid path token)
+      (fun (path, token, depth) ->
+        let depth =
+          match depth with
+          | None ->
+              "None"
+          | Some x ->
+              Printf.sprintf "Some %d" x
+        in
+        Printf.sprintf "watch %s: %s %s %s\n" domid path token depth
+      )
       (list_watches con)
   in
   String.concat "" watches
