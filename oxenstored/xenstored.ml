@@ -213,10 +213,17 @@ module DB = struct
                 ~remote_port:(Utils.int_of_string_exn remote_port)
                 (Utils.int_of_string_exn domid)
                 (Nativeint.of_string mfn)
+          (* Migrate from previous versions when watches did not have
+             a depth parameter *)
           | ["watch"; domid; path; token] ->
               watch_f
                 (Utils.int_of_string_exn domid)
+                (unhexify path) (unhexify token) None
+          | ["watch"; domid; path; token; depth] ->
+              watch_f
+                (Utils.int_of_string_exn domid)
                 (unhexify path) (unhexify token)
+                (Some (Utils.int_of_string_exn depth ~unsigned:true))
           | ["store"; path; perms; value] ->
               store_f (getpath path)
                 (Perms.Node.of_string (unhexify perms ^ "\000"))
@@ -284,8 +291,8 @@ module DB = struct
       else
         Connections.find_domain cons id
     in
-    let watch_f id path token =
-      ignore (Connections.add_watch cons (get_con id) path token)
+    let watch_f id path token depth =
+      ignore (Connections.add_watch cons (get_con id) path token depth)
     in
     let store_f path perms value =
       op.Store.write path value ;
@@ -560,9 +567,12 @@ let main () =
             let notify, deaddom = Domains.cleanup domains in
             List.iter (Store.reset_permissions store) deaddom ;
             List.iter (Connections.del_domain cons) deaddom ;
-            if deaddom <> [] || notify then
-              Connections.fire_spec_watches (Store.get_root store) cons
-                Store.Path.release_domain
+            if notify then
+              List.iter
+                (Connections.fire_spec_watches (Store.get_root store) cons
+                   Store.Path.release_domain
+                )
+                deaddom
           ) else
             let c = Connections.find_domain_by_port cons port in
             match Connection.get_domain c with

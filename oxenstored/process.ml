@@ -709,18 +709,20 @@ let transaction_replay c t doms cons =
         (fun () -> ignore @@ Connection.end_transaction c tid None)
 
 let do_watch con _t _domains cons data =
-  let node, token =
+  let node, token, depth =
     match split None '\000' data with
+    | [node; token; depth; ""] ->
+        (node, token, Some (Utils.int_of_string_exn depth ~unsigned:true))
     | [node; token; ""] ->
-        (node, token)
+        (node, token, None)
     | _ ->
         raise Invalid_Cmd_Args
   in
-  let watch = Connections.add_watch cons con node token in
+  let watch = Connections.add_watch cons con node token depth in
   Packet.Ack
     (fun () ->
       (* xenstore.txt says this watch is fired immediately,
-         		   implying even if path doesn't exist or is unreadable *)
+         implying even if path doesn't exist or is unreadable *)
       Connection.fire_single_watch_unchecked con watch
     )
 
@@ -798,7 +800,7 @@ let do_introduce con t domains cons data =
         let ndom = Domains.create ~remote_port domains domid mfn in
         Connections.add_domain cons ndom ;
         Connections.fire_spec_watches (Transaction.get_root t) cons
-          Store.Path.introduce_domain ;
+          Store.Path.introduce_domain domid ;
         ndom
       with _ -> raise Invalid_Cmd_Args
   in
@@ -821,7 +823,7 @@ let do_release con t domains cons data =
   Store.reset_permissions (Transaction.get_store t) domid ;
   if fire_spec_watches then
     Connections.fire_spec_watches (Transaction.get_root t) cons
-      Store.Path.release_domain
+      Store.Path.release_domain domid
   else
     raise Invalid_Cmd_Args
 
