@@ -43,7 +43,7 @@ static struct custom_operations xsd_glue_xenctrl_ops = {
         .compare_ext = custom_compare_ext_default,      /* Can't compare     */
 };
 
-static void Noreturn
+CAMLnoreturn_start static void CAMLnoreturn_end
 xsd_glue_failwith (xc_interface * xch, const char *func, unsigned int line)
 {
         CAMLparam0 ();
@@ -71,6 +71,7 @@ xsd_glue_failwith (xc_interface * xch, const char *func, unsigned int line)
         free (str);
 
         caml_raise_with_arg (*caml_named_value ("xsg.error_v1"), msg);
+        CAMLnoreturn;
 }
 
 #define xsd_glue_failwith(xch) xsd_glue_failwith(xch, __func__, __LINE__)

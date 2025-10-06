@@ -102,9 +102,9 @@ stub_gnttab_unmap (value xgh, value array)
 
                   if (result != 0)
                     {
-                            int r = snprintf (s, 64,
-                                              "Failed to unmap grant (errno %d, rc %d)",
-                                              errno, result);
+                            snprintf (s, 64,
+                                      "Failed to unmap grant (errno %d, rc %d)",
+                                      errno, result);
                             caml_failwith (s);
                     }
           }
