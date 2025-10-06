@@ -3,7 +3,7 @@
  (name xenstored_main)
  (modules
   (:standard \ syslog configure))
- (libraries unix xenbus xen-evtchn xen-evtchn-unix-minimal
+ (libraries unix dynlink xenbus xen-evtchn xen-evtchn-unix-minimal
             xengnt xenmmap syslog xsd_glue systemd testing_status
             dune-site dune-site.plugins))
 
