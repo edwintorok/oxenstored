@@ -568,10 +568,8 @@ let main () =
             let shutdown_domains, dead_domains = Domains.cleanup domains in
             List.iter (Store.reset_permissions store) dead_domains ;
             List.iter (Connections.del_domain cons) dead_domains ;
-            List.iter
-              (Connections.fire_spec_watches (Store.get_root store) cons
-                 Store.Path.release_domain
-              )
+            Connections.fire_spec_watches (Store.get_root store) cons
+              Store.Path.release_domain
               (List.append dead_domains shutdown_domains)
           ) else
             let c = Connections.find_domain_by_port cons port in

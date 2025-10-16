@@ -235,37 +235,52 @@ let fire_watches ?oldroot source root cons path recurse =
 
 let send_watchevents con = Connection.source_flush_watchevents con
 
-let fire_spec_watches root cons specpath domid =
+let fire_spec_watches root cons specpath domids =
   let source = find_domain cons 0 in
 
-  (* Trigger @releaseDomain/domid watches as well *)
-  let specpaths =
-    specpath
-    ::
-    ( if specpath = "@releaseDomain" then
-        [Printf.sprintf "%s/%d" specpath domid]
-      else
-        []
+  let fire_spec_watch fire_generic domid =
+    (* Trigger @releaseDomain/domid watches as well *)
+    let specpaths =
+      (true, specpath) (* is_path_generic, specpath *)
+      ::
+      ( if specpath = "@releaseDomain" then
+          [(false, Printf.sprintf "%s/%d" specpath domid)]
+        else
+          []
+      )
+    in
+    iter cons (fun con ->
+        List.iter
+          (fun (is_path_generic, specpath) ->
+            List.iter
+              (fun w ->
+                (* Report the path as '@xDomain/domid' if depth is specified *)
+                let is_event_generic, watch =
+                  if w.Connection.depth = Some 1 then
+                    (false, {w with path= Printf.sprintf "%s/%d" specpath domid})
+                  else
+                    (is_path_generic, w)
+                in
+                (* Fire a "generic" '@eventDomain' event only once to avoid adding noise,
+                   since clients might see these events individually and scan the whole tree
+                   after each one.
+                   '@eventDomain/domid' events (either because this path is specifically
+                   watched or because a generic path with depth=1 is watched) should be
+                   fired per domid *)
+                if (not is_event_generic) || fire_generic then
+                  Connection.fire_single_watch source (None, root) 0 watch
+              )
+              (Connection.get_watches con specpath)
+          )
+          specpaths
     )
   in
-  iter cons (fun con ->
-      List.iter
-        (fun specpath ->
-          List.iter
-            (fun w ->
-              (* Report the path as '@xDomain/domid' if depth is specified *)
-              let watch =
-                if w.Connection.depth = Some 1 then
-                  {w with path= Printf.sprintf "%s/%d" specpath domid}
-                else
-                  w
-              in
-              Connection.fire_single_watch source (None, root) 0 watch
-            )
-            (Connection.get_watches con specpath)
-        )
-        specpaths
-  )
+  match domids with
+  | domid :: tail ->
+      fire_spec_watch true domid ;
+      List.iter (fire_spec_watch false) tail
+  | [] ->
+      ()
 
 let set_target cons domain target_domain =
   let con = find_domain cons domain in
