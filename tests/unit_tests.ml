@@ -9,6 +9,19 @@ let initialize () =
   let cons = Connections.create () in
   (store, doms, cons)
 
+let initialize_main_loop () =
+  Domains.xenstored_port := "/tmp/port" ;
+  let fd =
+    Unix.openfile !Domains.xenstored_port [Unix.O_RDWR; Unix.O_CREAT] 0o600
+  in
+  let _ = Unix.write_substring fd "0" 0 1 in
+  Unix.close fd ;
+  Domains.xenstored_kva := "/tmp/kva" ;
+  let fd =
+    Unix.openfile !Domains.xenstored_kva [Unix.O_RDWR; Unix.O_CREAT] 0o600
+  in
+  Unix.close fd
+
 let create_dom0_conn cons doms =
   (* NOTE: We can't use Domains.create0 since that opens several files
      unavailable in the test env *)
@@ -434,11 +447,8 @@ let test_transaction_watches () =
   let actual = Xenbus.Xb.unsafe_pop_output dom0.xb in
   check_result actual (Transaction_end, ["OK"])
 
-(* Check that @introduceDomain and @releaseDomain watches appear on respective calls *)
-let test_introduce_release_watches () =
-  let store, doms, cons = initialize () in
-  let dom0 = create_dom0_conn cons doms in
-
+let register_spec_watches store cons doms dom0 =
+  (* Register both special watches *)
   run store cons doms
     [(dom0, none, (Watch, ["@introduceDomain"; "token"]), (Watch, ["OK"]))] ;
   assert_watches dom0 [("@introduceDomain", "token", None)] ;
@@ -450,7 +460,14 @@ let test_introduce_release_watches () =
   assert_watches dom0
     [("@releaseDomain", "token", None); ("@introduceDomain", "token", None)] ;
   (* One Watchevent is fired immediately after adding the watch unconditionally *)
-  check_for_watchevent dom0 "@releaseDomain" "token" ;
+  check_for_watchevent dom0 "@releaseDomain" "token"
+
+(* Check that @introduceDomain and @releaseDomain watches appear on respective calls *)
+let test_introduce_release_watches () =
+  let store, doms, cons = initialize () in
+  let dom0 = create_dom0_conn cons doms in
+
+  register_spec_watches store cons doms dom0 ;
 
   (* Watchevent is pushed to the queue first, then Introduce *)
   run store cons doms
@@ -469,6 +486,67 @@ let test_introduce_release_watches () =
     [(dom0, none, (Release, ["5"]), (Watchevent, ["@releaseDomain"; "token"]))] ;
   let actual = Xenbus.Xb.unsafe_pop_output dom0.xb in
   check_result actual (Release, ["OK"])
+
+(* Check that @introduceDomain and @releaseDomain watches appear on domains dying *)
+let test_introduce_release_watches_on_domain_death () =
+  (* Only the Xenstored.main loop checks for domains dying, so we need to
+     do special handling here unlike any other unit test *)
+  initialize_main_loop () ;
+  let one_loop_iteration, store, cons, doms = Xenstored.main () in
+  let dom0 = Hashtbl.find cons.domains 0 in
+
+  register_spec_watches store cons doms dom0 ;
+
+  (* Domains in [1000; 2000] are considered shutdown on the first query *)
+  let _ = create_domU_conn cons doms 1001 in
+  (* Check that a @releaseDomain watch event is sent when a domain shuts down *)
+  one_loop_iteration () ;
+  let actual = Xenbus.Xb.unsafe_pop_output dom0.xb in
+  check_result actual (Watchevent, ["@releaseDomain"; "token"]) ;
+  check_no_watchevents dom0 ;
+
+  (* Domains > 2000 are considered dead on the first query *)
+  let _ = create_domU_conn cons doms 2001 in
+  let _ = create_domU_conn cons doms 2002 in
+
+  (* Check that only a single @releaseDomain watch event is sent
+     when multiple domains die *)
+  one_loop_iteration () ;
+  let actual = Xenbus.Xb.unsafe_pop_output dom0.xb in
+  check_result actual (Watchevent, ["@releaseDomain"; "token"]) ;
+  check_no_watchevents dom0 ;
+
+  (* Register a releaseDomain with depth=1 *)
+  run store cons doms
+    [
+      ( dom0
+      , none
+      , (Watch, ["@releaseDomain"; "tokendepth"; "1"])
+      , (Watch, ["OK"])
+      )
+    ] ;
+  assert_watches dom0
+    [
+      ("@releaseDomain", "tokendepth", Some 1)
+    ; ("@releaseDomain", "token", None)
+    ; ("@introduceDomain", "token", None)
+    ] ;
+  (* One Watchevent is fired immediately after adding the watch unconditionally *)
+  check_for_watchevent dom0 "@releaseDomain" "tokendepth" ;
+
+  (* Verify that detailed watch events are sent when multiple domains die *)
+  let _ = create_domU_conn cons doms 2003 in
+  let _ = create_domU_conn cons doms 2004 in
+  one_loop_iteration () ;
+  let actual = Xenbus.Xb.unsafe_pop_output dom0.xb in
+  check_result actual (Watchevent, ["@releaseDomain/2004"; "tokendepth"]) ;
+  let actual = Xenbus.Xb.unsafe_pop_output dom0.xb in
+  check_result actual (Watchevent, ["@releaseDomain"; "token"]) ;
+  let actual = Xenbus.Xb.unsafe_pop_output dom0.xb in
+  check_result actual (Watchevent, ["@releaseDomain/2003"; "tokendepth"]) ;
+  let actual = Xenbus.Xb.unsafe_pop_output dom0.xb in
+  check_result actual (Watchevent, ["@releaseDomain/1001"; "tokendepth"]) ;
+  check_no_watchevents dom0
 
 (* Check that rm generates recursive watches *)
 let test_recursive_rm_watch () =
@@ -875,6 +953,10 @@ let () =
         ; ( "test_introduce_release_watches"
           , `Quick
           , test_introduce_release_watches
+          )
+        ; ( "test_introduce_release_watches_on_domain_death"
+          , `Quick
+          , test_introduce_release_watches_on_domain_death
           )
         ; ("test_recursive_rm_watch", `Quick, test_recursive_rm_watch)
         ; ("test_no_watch_on_error", `Quick, test_no_watch_on_error)
