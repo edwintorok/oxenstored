@@ -131,8 +131,8 @@ let remove_from_queue dom queue =
     queue
 
 let cleanup doms =
-  let notify = ref false in
-  let dead_dom = ref [] in
+  let shutdown_domains = ref [] in
+  let dead_domains = ref [] in
 
   Hashtbl.iter
     (fun id _ ->
@@ -143,13 +143,13 @@ let cleanup doms =
             debug "Domain %u died (dying=%b, shutdown %b -- code %d)" id
               info.Plugin.dying info.Plugin.shutdown info.Plugin.shutdown_code ;
             if info.Plugin.dying then
-              dead_dom := id :: !dead_dom
+              dead_domains := id :: !dead_domains
             else
-              notify := true
+              shutdown_domains := id :: !shutdown_domains
           )
         with Plugin.Error _ ->
           debug "Domain %u died -- no domain info" id ;
-          dead_dom := id :: !dead_dom
+          dead_domains := id :: !dead_domains
       )
     )
     doms.table ;
@@ -164,8 +164,8 @@ let cleanup doms =
           remove_from_queue dom doms.doms_conflict_paused
       )
     )
-    !dead_dom ;
-  (!notify, !dead_dom)
+    !dead_domains ;
+  (!shutdown_domains, !dead_domains)
 
 let resume _doms _domid = ()
 

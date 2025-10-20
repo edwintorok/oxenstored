@@ -38,7 +38,13 @@ module Domain_getinfo_V1_impl = struct
   let interface_open () = 1
 
   let domain_getinfo _h domid =
-    {domid; dying= false; shutdown= false; shutdown_code= 1}
+    (* Special casing for test_introduce_release_watches_on_domain_death *)
+    if domid > 2000 then
+      {domid; dying= true; shutdown= false; shutdown_code= 1}
+    else if domid > 1000 then
+      {domid; dying= false; shutdown= true; shutdown_code= 1}
+    else
+      {domid; dying= false; shutdown= false; shutdown_code= 1}
 
   let domain_getinfolist _h =
     [|{domid= 1; dying= false; shutdown= false; shutdown_code= 1}|]

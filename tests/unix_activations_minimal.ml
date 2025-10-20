@@ -1,3 +1,3 @@
 let fd _handle = Eventchn.devnull
 
-let pending _handle = 0
+let pending _handle = 1

@@ -1,4 +1,4 @@
-(copy_files# ../oxenstored/*.ml{,i})
+(copy_files# (only_sources true) (files ../oxenstored/*.ml{,i}))
 (copy_files# ../ocaml-evtchn/lib/eventchn_stubs.c)
 
 (library

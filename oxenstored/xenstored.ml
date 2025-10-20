@@ -438,7 +438,8 @@ let main () =
         (Unix.handle_unix_error Utils.create_unix_socket Define.xs_daemon_socket)
   in
 
-  if cf.daemonize && not cf.live_reload then
+  if (not Testing_status.under_testing) && cf.daemonize && not cf.live_reload
+  then
     Unixext.daemonize ()
   else
     printf "Xen Storage Daemon, version %d.%d\n%!" Define.xenstored_major
@@ -564,12 +565,12 @@ let main () =
       finally
         (fun () ->
           if port = eventchn.Event.domexc then (
-            let notify, deaddom = Domains.cleanup domains in
-            List.iter (Store.reset_permissions store) deaddom ;
-            List.iter (Connections.del_domain cons) deaddom ;
-            if deaddom <> [] || notify then
-              Connections.fire_spec_watches (Store.get_root store) cons
-                Store.Path.release_domain
+            let shutdown_domains, dead_domains = Domains.cleanup domains in
+            List.iter (Store.reset_permissions store) dead_domains ;
+            List.iter (Connections.del_domain cons) dead_domains ;
+            Connections.fire_spec_watches (Store.get_root store) cons
+              Store.Path.release_domain
+              (List.append dead_domains shutdown_domains)
           ) else
             let c = Connections.find_domain_by_port cons port in
             match Connection.get_domain c with
@@ -715,45 +716,50 @@ let main () =
 
     if cfds <> [] || wset <> [] then
       process_connection_fds store cons domains cfds wset spec_fds ;
-    ( if timeout <> 0. then
-        let now = Unix.gettimeofday () in
-        if now > !period_start +. period_ops_interval then (
-          period_start := now ;
-          periodic_ops now
-        )
-    ) ;
+    if not Testing_status.under_testing then (
+      ( if timeout <> 0. then
+          let now = Unix.gettimeofday () in
+          if now > !period_start +. period_ops_interval then (
+            period_start := now ;
+            periodic_ops now
+          )
+      ) ;
 
-    process_domains store cons domains
+      process_domains store cons domains
+    )
   in
 
-  Systemd.sd_notify_ready () ;
-  let live_update = ref false in
-  while not (!quit && Connections.prevents_quit cons = []) do
-    try
-      main_loop () ;
-      live_update := Process.LiveUpdate.should_run cons ;
-      if !live_update || !quit then (
-        (* don't initiate live update if saving state fails *)
-        DB.to_file store cons (rw_sock, eventchn) Disk.xs_daemon_database ;
-        quit := true
-      )
-    with exc ->
-      let bt = Printexc.get_backtrace () in
-      error "caught exception %s: %s" (Printexc.to_string exc) bt ;
-      if cf.reraise_top_level then
-        raise exc
-  done ;
-  info "stopping xenstored" ;
-  (* unlink pidfile so that launch-xenstore works again *)
-  Unixext.unlink_safe pidfile ;
-  ( match cf.pidfile with
-  | Some pidfile ->
-      Unixext.unlink_safe pidfile
-  | None ->
-      ()
-  ) ;
+  if not Testing_status.under_testing then (
+    Systemd.sd_notify_ready () ;
+    let live_update = ref false in
+    while not (!quit && Connections.prevents_quit cons = []) do
+      try
+        main_loop () ;
+        live_update := Process.LiveUpdate.should_run cons ;
+        if !live_update || !quit then (
+          (* don't initiate live update if saving state fails *)
+          DB.to_file store cons (rw_sock, eventchn) Disk.xs_daemon_database ;
+          quit := true
+        )
+      with exc ->
+        let bt = Printexc.get_backtrace () in
+        error "caught exception %s: %s" (Printexc.to_string exc) bt ;
+        if cf.reraise_top_level then
+          raise exc
+    done ;
+    info "stopping xenstored" ;
+    (* unlink pidfile so that launch-xenstore works again *)
+    Unixext.unlink_safe pidfile ;
+    ( match cf.pidfile with
+    | Some pidfile ->
+        Unixext.unlink_safe pidfile
+    | None ->
+        ()
+    ) ;
 
-  if !live_update then (
-    Logging.live_update () ;
-    Process.LiveUpdate.launch_exn !Process.LiveUpdate.state
-  )
+    if !live_update then (
+      Logging.live_update () ;
+      Process.LiveUpdate.launch_exn !Process.LiveUpdate.state
+    )
+  ) ;
+  (main_loop, store, cons, domains)
